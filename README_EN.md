@@ -28,7 +28,7 @@ Adds folder tabs to GIF, Sticker, and Emoji panels for organizing your media int
 ## 📥 Installation
 
 1. Navigate to the [**Releases**](https://github.com/MaxExteraPlugins/media_folders/releases/latest) section.
-2. Download the `media_folders_v3.4.1.plugin` file.
+2. Download the `media_folders_v3.5.plugin` file.
 3. Send the file to your Telegram Saved Messages or open it via file manager in exteraGram / AyuGram.
 4. Tap the file in Telegram and choose **"Install plugin"**.
 

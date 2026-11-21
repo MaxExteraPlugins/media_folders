@@ -28,7 +28,7 @@
 ## 📥 Установка
 
 1. Перейдите во вкладку [**Releases**](https://github.com/MaxExteraPlugins/media_folders/releases/latest).
-2. Скачайте файл плагина `media_folders_v3.4.1.plugin`.
+2. Скачайте файл плагина `media_folders_v3.5.plugin`.
 3. Отправьте файл в Telegram (в «Избранное») или откройте его через проводник в exteraGram / AyuGram.
 4. Нажмите на сообщение с плагином и выберите **«Установить плагин»**.
 

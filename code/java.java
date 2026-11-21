@@ -22,6 +22,7 @@ import android.text.TextUtils;
 import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowManager;
 import android.view.animation.DecelerateInterpolator;
 import android.widget.EditText;
 import android.widget.FrameLayout;
@@ -78,6 +79,7 @@ import org.telegram.ui.ActionBar.Theme;
 import org.telegram.ui.ChatActivity;
 import org.telegram.ui.Components.BackupImageView;
 import org.telegram.ui.Components.BulletinFactory;
+import org.telegram.ui.Components.ChatActivityEnterView;
 import org.telegram.ui.Components.EmojiView;
 import org.telegram.ui.ContentPreviewViewer;
 import org.telegram.ui.LaunchActivity;
@@ -1077,6 +1079,30 @@ public class Main {
                     return;
                 }
                 this.container = (ViewGroup) objGf;
+                if (!Main.foldersEnabled(this.mt)) {
+                    removeFolderBar();
+                    this.barCollapsed = false;
+                    return;
+                }
+                ensureLayoutWatcher();
+                if (this.folderBar != null && this.folderBar.getParent() == this.container) {
+                    int iTabsHeight = tabsHeightDefault();
+                    View vTabs = Main.gf(this.emojiView, tabsField()) instanceof View ? (View) Main.gf(this.emojiView, tabsField()) : null;
+                    if (vTabs != null && !Main.G.equals(this.mt)) {
+                        int mh = vTabs.getMeasuredHeight();
+                        if (mh > 0) {
+                            iTabsHeight = mh;
+                        }
+                    }
+                    if (iTabsHeight != this.lastTabsHeight) {
+                        this.lastTabsHeight = iTabsHeight;
+                        updateBarTopMargin(iTabsHeight);
+                    }
+                    this.folderBar.bringToFront();
+                    rebuildTabs();
+                    applyFolderFilter();
+                    return;
+                }
                 View viewFindViewWithTag = this.container.findViewWithTag(barTag());
                 if (viewFindViewWithTag != null) {
                     this.container.removeView(viewFindViewWithTag);
@@ -1090,11 +1116,6 @@ public class Main {
                     this.container.removeView(viewFindViewWithTag3);
                 }
                 resetOffsets();
-                ensureLayoutWatcher();
-                if (!Main.foldersEnabled(this.mt)) {
-                    this.barCollapsed = false;
-                    return;
-                }
                 int iDp = AndroidUtilities.dp(44.0f);
                 int iTabsHeightDefault = tabsHeightDefault();
                 Context context = this.container.getContext();
@@ -1108,6 +1129,7 @@ public class Main {
                     } catch (Throwable th) {
                     }
                 }
+                this.lastTabsHeight = iTabsHeightDefault;
                 this.folderBar = createFolderBar(context);
                 this.folderBar.setTag(barTag());
                 FrameLayout.LayoutParams layoutParams = new FrameLayout.LayoutParams(-1, iDp);
@@ -1133,7 +1155,7 @@ public class Main {
                     this.container.addView(this.customScroll, layoutParams3);
                 }
                 View view2 = Main.gf(this.emojiView, gridField()) instanceof View ? (View) Main.gf(this.emojiView, gridField()) : null;
-                if (view2 != null) {
+                if (view2 != null && !this.gridTranslated) {
                     ViewGroup.LayoutParams layoutParams4 = view2.getLayoutParams();
                     if (layoutParams4 instanceof ViewGroup.MarginLayoutParams) {
                         ViewGroup.MarginLayoutParams marginLayoutParams = (ViewGroup.MarginLayoutParams) layoutParams4;
@@ -1186,6 +1208,26 @@ public class Main {
             }
         }
 
+        void updateBarTopMargin(int newTabsHeight) {
+            try {
+                int iDp = AndroidUtilities.dp(44.0f);
+                if (this.folderBar != null) {
+                    ViewGroup.LayoutParams lp = this.folderBar.getLayoutParams();
+                    if (lp instanceof ViewGroup.MarginLayoutParams) {
+                        ((ViewGroup.MarginLayoutParams) lp).topMargin = newTabsHeight;
+                        this.folderBar.setLayoutParams(lp);
+                    }
+                }
+                if (this.customScroll != null) {
+                    ViewGroup.LayoutParams lp2 = this.customScroll.getLayoutParams();
+                    if (lp2 instanceof ViewGroup.MarginLayoutParams) {
+                        ((ViewGroup.MarginLayoutParams) lp2).topMargin = newTabsHeight + iDp;
+                        this.customScroll.setLayoutParams(lp2);
+                    }
+                }
+            } catch (Throwable ignored) {}
+        }
+
         void ensureLayoutWatcher() {
             try {
                 if (!this.layoutWatcherAttached && this.container != null) {
@@ -1206,7 +1248,7 @@ public class Main {
                                 }
                                 if (iTabsHeightDefault != FolderBarManager.this.lastTabsHeight) {
                                     FolderBarManager.this.lastTabsHeight = iTabsHeightDefault;
-                                    FolderBarManager.this.injectFolderBar();
+                                    FolderBarManager.this.updateBarTopMargin(iTabsHeightDefault);
                                 }
                             } catch (Throwable th) {
                             }
@@ -1638,12 +1680,10 @@ public class Main {
             }
             this.tabsContainer.removeAllViews();
             this.tabViews.clear();
-            Context context = this.tabsContainer.getContext();
-            this.tabsContainer.addView(createEnableToggle(context));
             if (!Main.foldersEnabled(this.mt)) {
-                updateSelection();
                 return;
             }
+            Context context = this.tabsContainer.getContext();
             this.tabsContainer.addView(createSettingsButton(context));
             this.tabsContainer.addView(createAddButton(context));
             JSONArray jSONArrayFolders = Main.folders(this.mt);
@@ -1670,75 +1710,6 @@ public class Main {
                 }
             }
             updateSelection();
-        }
-
-        View createEnableToggle(Context context) {
-            int color;
-            FrameLayout frameLayout = new FrameLayout(context);
-            LinearLayout.LayoutParams layoutParams = new LinearLayout.LayoutParams(-2, AndroidUtilities.dp(30.0f));
-            layoutParams.setMargins(AndroidUtilities.dp(3.0f), 0, AndroidUtilities.dp(3.0f), 0);
-            frameLayout.setLayoutParams(layoutParams);
-            int iDp = AndroidUtilities.dp(10.0f);
-            frameLayout.setPadding(iDp, 0, iDp, 0);
-            boolean zFoldersEnabled = Main.foldersEnabled(this.mt);
-            if (Main.glassEnabled() && Main.glassTabs()) {
-                frameLayout.setBackground(Main.createGlassTabDrawable(zFoldersEnabled, Main.glassAlpha(), 10));
-            } else {
-                GradientDrawable gradientDrawable = new GradientDrawable();
-                gradientDrawable.setShape(0);
-                gradientDrawable.setCornerRadius(AndroidUtilities.dp(10.0f));
-                if (zFoldersEnabled) {
-                    Integer numTabBgColor = Main.tabBgColor();
-                    gradientDrawable.setColor(numTabBgColor != null ? numTabBgColor.intValue() : Theme.getColor(Theme.key_chat_emojiPanelStickerPackSelectorLine));
-                } else {
-                    gradientDrawable.setColor(Theme.getColor(Theme.key_divider));
-                }
-                frameLayout.setBackground(gradientDrawable);
-            }
-            frameLayout.setForeground(Main.createRippleDrawable(0, 10));
-            ImageView imageView = new ImageView(context);
-            imageView.setImageResource(getDrawableRes("msg_folders"));
-            Integer numTabTextColor = Main.tabTextColor();
-            if (numTabTextColor != null) {
-                color = numTabTextColor.intValue();
-            } else if (zFoldersEnabled) {
-                color = -1;
-            } else {
-                color = Theme.getColor(Theme.key_chat_emojiPanelIcon);
-            }
-            imageView.setColorFilter(color, PorterDuff.Mode.SRC_ATOP);
-            imageView.setScaleType(ImageView.ScaleType.CENTER);
-            frameLayout.addView(imageView, new FrameLayout.LayoutParams(-1, -1, 17));
-            frameLayout.setOnClickListener(new View.OnClickListener() { // from class: com.maxplugins.mediafolders.Main.FolderBarManager.0
-                @Override // android.view.View.OnClickListener
-                public final void onClick(View view) {
-                    FolderBarManager.this.m6xc57200e6(view);
-                }
-            });
-            return frameLayout;
-        }
-
-        /* JADX INFO: renamed from: lambda$createEnableToggle$2$com-maxplugins-mediafolders-Main$FolderBarManager, reason: not valid java name */
-        /* synthetic */ void m6xc57200e6(View view) {
-            onToggleFoldersEnabled();
-        }
-
-        void onToggleFoldersEnabled() {
-            Main.setFoldersEnabled(this.mt, !Main.foldersEnabled(this.mt));
-            Main.ui(new Runnable() { // from class: com.maxplugins.mediafolders.Main.FolderBarManager.19
-                @Override // java.lang.Runnable
-                public final void run() {
-                    FolderBarManager.this.m13x7ed8c303();
-                }
-            }, 120L);
-        }
-
-        /* JADX INFO: renamed from: lambda$onToggleFoldersEnabled$3$com-maxplugins-mediafolders-Main$FolderBarManager, reason: not valid java name */
-        /* synthetic */ void m13x7ed8c303() {
-            Iterator<FolderBarManager> it = Main.managersForType(this.mt).values().iterator();
-            while (it.hasNext()) {
-                it.next().injectFolderBar();
-            }
         }
 
         View createSettingsButton(Context context) {
@@ -3244,7 +3215,6 @@ public class Main {
         try {
             Class<?> cls = Class.forName("org.telegram.ui.Components.EmojiView");
             hookMethodsByName(cls, "onAttachedToWindow", attachHook);
-            hookMethodsByName(cls, "setAllow", attachHook);
             hookMethodsByName(cls, "updateGifTabs", updateGifTabsHook);
             hookMethodsByName(cls, "updateRecentGifs", recentGifsHook);
             hookMethodsByName(cls, "updateStickerTabs", updateStickerTabsHook);
@@ -3308,7 +3278,18 @@ public class Main {
                 arrayList.add((z ? "\u2705  " : "\u2b1c  ") + strOptString);
             }
         }
-        new AlertDialog.Builder(activity).setTitle(Main.isRussian() ? ("\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0432 \u043f\u0430\u043f\u043a\u0443 " + mediaLabel(str)) : (Main.isRussian() ? ("\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0432 \u043f\u0430\u043f\u043a\u0443 " + mediaLabel(str)) : ("Add to " + mediaLabel(str) + " folder"))).setItems((CharSequence[]) arrayList.toArray(new String[0]), new DialogInterface.OnClickListener() { // from class: com.maxplugins.mediafolders.Main.13
+        final boolean wasPopupShowing;
+        final ChatActivityEnterView enterView;
+        BaseFragment lastFragment = LaunchActivity.getLastFragment();
+        if (lastFragment instanceof ChatActivity) {
+            enterView = ((ChatActivity) lastFragment).getChatActivityEnterView();
+            wasPopupShowing = enterView != null && enterView.isPopupShowing();
+        } else {
+            enterView = null;
+            wasPopupShowing = false;
+        }
+
+        AlertDialog alertDialog = new AlertDialog.Builder(activity).setTitle(Main.isRussian() ? ("\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0432 \u043f\u0430\u043f\u043a\u0443 " + mediaLabel(str)) : ("Add to " + mediaLabel(str) + " folder")).setItems((CharSequence[]) arrayList.toArray(new String[0]), new DialogInterface.OnClickListener() { // from class: com.maxplugins.mediafolders.Main.13
             @Override // android.content.DialogInterface.OnClickListener
             public final void onClick(DialogInterface dialogInterface, int i3) {
                 Main.lambda$showAddToFolderDialog$4(str, str2, dialogInterface, i3);
@@ -3317,7 +3298,38 @@ public class Main {
             public final void onClick(AlertDialog alertDialog, int i3) {
                 alertDialog.dismiss();
             }
-        }).show();
+        }).create();
+
+        try {
+            if (alertDialog.getWindow() != null) {
+                alertDialog.getWindow().setFlags(
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM
+                );
+            }
+        } catch (Throwable th) {
+        }
+
+        alertDialog.setOnDismissListener(new DialogInterface.OnDismissListener() {
+            @Override
+            public void onDismiss(DialogInterface d) {
+                if (wasPopupShowing && enterView != null) {
+                    Main.ui(new Runnable() {
+                        @Override
+                        public void run() {
+                            try {
+                                if (!enterView.isPopupShowing()) {
+                                    enterView.showEmojiView();
+                                }
+                            } catch (Throwable th2) {
+                            }
+                        }
+                    }, 50L);
+                }
+            }
+        });
+
+        alertDialog.show();
     }
 
     static /* synthetic */ void lambda$showAddToFolderDialog$4(final String str, String str2, DialogInterface dialogInterface, int i) {
