@@ -191,6 +191,71 @@ public class Main {
     static final Map<Object, FolderBarManager> STICKER_MANAGERS = new IdentityHashMap();
     static final Map<Object, FolderBarManager> EMOJI_MANAGERS = new IdentityHashMap();
     static final Set<Object> scrollHookedGrids = Collections.newSetFromMap(new IdentityHashMap());
+    static final XC_MethodHook openSearchHook = new XC_MethodHook() {
+        @Override
+        public void afterHookedMethod(XC_MethodHook.MethodHookParam methodHookParam) {
+            try {
+                final Object obj = methodHookParam.thisObject;
+                if (obj == null) {
+                    return;
+                }
+                Main.onEmojiViewSearchStateChanged(obj, true);
+            } catch (Throwable ignored) {
+            }
+        }
+    };
+    static final XC_MethodHook closeSearchHook = new XC_MethodHook() {
+        @Override
+        public void afterHookedMethod(XC_MethodHook.MethodHookParam methodHookParam) {
+            try {
+                final Object obj = methodHookParam.thisObject;
+                if (obj == null) {
+                    return;
+                }
+                Main.onEmojiViewSearchStateChanged(obj, false);
+            } catch (Throwable ignored) {
+            }
+        }
+    };
+    static final XC_MethodHook pageChangeHook = new XC_MethodHook() {
+        @Override
+        public void afterHookedMethod(XC_MethodHook.MethodHookParam methodHookParam) {
+            try {
+                final Object obj = methodHookParam.thisObject;
+                if (obj == null) {
+                    return;
+                }
+                Main.ui(new Runnable() {
+                    @Override
+                    public final void run() {
+                        Main.onEmojiViewPageChanged(obj);
+                    }
+                });
+            } catch (Throwable ignored) {
+            }
+        }
+    };
+    static final XC_MethodHook viewPagerHook = new XC_MethodHook() {
+        @Override
+        public void afterHookedMethod(XC_MethodHook.MethodHookParam methodHookParam) {
+            try {
+                Object vp = methodHookParam.thisObject;
+                if (vp instanceof View) {
+                    android.view.ViewParent p = ((View) vp).getParent();
+                    if (p != null) {
+                        final Object emojiView = p;
+                        Main.ui(new Runnable() {
+                            @Override
+                            public final void run() {
+                                Main.onEmojiViewPageChanged(emojiView);
+                            }
+                        });
+                    }
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+    };
     static final XC_MethodHook attachHook = new XC_MethodHook() { // from class: com.maxplugins.mediafolders.Main.1
         public void afterHookedMethod(XC_MethodHook.MethodHookParam methodHookParam) {
             try {
@@ -589,11 +654,10 @@ public class Main {
     }
 
     static String activeFolderId(String str) {
-        return prefs().getString(keyFor(str, "active_folder"), "all");
+        return "all";
     }
 
     static void setActiveFolderId(String str, String str2) {
-        prefs().edit().putString(keyFor(str, "active_folder"), str2).commit();
     }
 
     static boolean hideTrending() {
@@ -984,6 +1048,7 @@ public class Main {
         String activeFolderId;
         ArrayList<TLRPC.Document> allRecentGifs;
         boolean barCollapsed;
+        boolean searchOpened;
         ValueAnimator collapseAnim;
         ViewGroup container;
         LinearLayout customGrid;
@@ -1001,6 +1066,7 @@ public class Main {
         int originalSearchMargin;
         LinearLayout subTabsContainer;
         LinearLayout tabsContainer;
+        HorizontalScrollView tabsScrollView;
         String activeSubTab = "custom";
         int lastTabsHeight = -1;
         final Map<String, View> tabViews = new HashMap();
@@ -1008,7 +1074,89 @@ public class Main {
         FolderBarManager(String str, Object obj) {
             this.mt = str;
             this.emojiView = obj;
-            this.activeFolderId = Main.activeFolderId(str);
+            this.activeFolderId = "all";
+        }
+
+        void resetToAllFolder() {
+            String target = "all";
+            if (Main.getAllTabHidden(this.mt)) {
+                ArrayList<String> tabs = Main.orderedTabs(this.mt);
+                for (String t : tabs) {
+                    if (!"all".equals(t)) {
+                        target = t;
+                        break;
+                    }
+                }
+            }
+            if (!target.equals(this.activeFolderId)) {
+                this.activeFolderId = target;
+                this.activeSubTab = "custom";
+                this.docMapCache = null;
+                if (this.tabsScrollView != null) {
+                    this.tabsScrollView.scrollTo(0, 0);
+                }
+                updateSelection();
+                applyFolderFilter();
+            }
+            if (this.searchOpened && !isSearchOpened()) {
+                this.searchOpened = false;
+                if (this.folderBar != null && !this.barCollapsed && !Main.G.equals(this.mt)) {
+                    this.folderBar.setTranslationY(0);
+                }
+            }
+        }
+
+        boolean isSearchOpened() {
+            try {
+                Object delegate = Main.gf(this.emojiView, "delegate");
+                if (delegate != null) {
+                    Method m = delegate.getClass().getMethod("isSearchOpened");
+                    m.setAccessible(true);
+                    Object res = m.invoke(delegate);
+                    if (res instanceof Boolean) {
+                        return ((Boolean) res).booleanValue();
+                    }
+                }
+            } catch (Throwable ignored) {}
+            return this.searchOpened;
+        }
+
+        void onSearchStateChanged(final boolean opened) {
+            this.searchOpened = opened;
+            this.barCollapsed = false;
+            if (this.collapseAnim != null) {
+                this.collapseAnim.cancel();
+                this.collapseAnim = null;
+            }
+            if (Main.G.equals(this.mt)) {
+                View viewSearch = Main.gf(this.emojiView, searchField()) instanceof View ? (View) Main.gf(this.emojiView, searchField()) : null;
+                if (viewSearch != null) {
+                    viewSearch.bringToFront();
+                }
+                if (this.folderBar != null) {
+                    this.folderBar.bringToFront();
+                }
+                return;
+            }
+            if (this.folderBar == null) {
+                return;
+            }
+            final int targetY = opened ? -this.lastTabsHeight : 0;
+            try {
+                Object anim = Main.gf(this.emojiView, "searchAnimation");
+                this.folderBar.animate().cancel();
+                if (anim != null) {
+                    this.folderBar.animate()
+                        .translationY(targetY)
+                        .setDuration(220)
+                        .setInterpolator(org.telegram.ui.Components.CubicBezierInterpolator.DEFAULT)
+                        .start();
+                } else {
+                    this.folderBar.setTranslationY(targetY);
+                }
+            } catch (Throwable th) {
+                this.folderBar.setTranslationY(targetY);
+            }
         }
 
         String containerField() {
@@ -1098,6 +1246,15 @@ public class Main {
                         this.lastTabsHeight = iTabsHeight;
                         updateBarTopMargin(iTabsHeight);
                     }
+                    if (isSearchOpened() && !Main.G.equals(this.mt)) {
+                        this.folderBar.setTranslationY(-this.lastTabsHeight);
+                    } else if (!this.barCollapsed && !Main.G.equals(this.mt)) {
+                        this.folderBar.setTranslationY(0);
+                    }
+                    View viewSearchExisting = Main.gf(this.emojiView, searchField()) instanceof View ? (View) Main.gf(this.emojiView, searchField()) : null;
+                    if (viewSearchExisting != null && Main.G.equals(this.mt)) {
+                        viewSearchExisting.bringToFront();
+                    }
                     this.folderBar.bringToFront();
                     rebuildTabs();
                     applyFolderFilter();
@@ -1138,13 +1295,12 @@ public class Main {
                     layoutParams.topMargin = iTabsHeightDefault;
                 }
                 this.container.addView(this.folderBar, layoutParams);
-                this.folderBar.bringToFront();
                 if (Main.G.equals(this.mt)) {
                     this.emptyOverlay = createEmptyOverlay(context);
                     this.emptyOverlay.setTag(emptyTag());
                     this.emptyOverlay.setVisibility(8);
                     FrameLayout.LayoutParams layoutParams2 = new FrameLayout.LayoutParams(-1, -1);
-                    layoutParams2.topMargin = iDp;
+                    layoutParams2.topMargin = iDp + AndroidUtilities.dp(48.0f);
                     this.container.addView(this.emptyOverlay, layoutParams2);
                 } else {
                     this.customScroll = createCustomContent(context);
@@ -1185,7 +1341,14 @@ public class Main {
                         }
                     } catch (Throwable th2) {
                     }
+                    if (Main.G.equals(this.mt)) {
+                        view3.bringToFront();
+                    }
                 }
+                if (isSearchOpened() && !Main.G.equals(this.mt)) {
+                    this.folderBar.setTranslationY(-iTabsHeightDefault);
+                }
+                this.folderBar.bringToFront();
                 if (Main.G.equals(this.mt)) {
                     View view4 = Main.gf(this.emojiView, "gifTabs") instanceof View ? (View) Main.gf(this.emojiView, "gifTabs") : null;
                     if (view4 != null) {
@@ -1216,6 +1379,11 @@ public class Main {
                     if (lp instanceof ViewGroup.MarginLayoutParams) {
                         ((ViewGroup.MarginLayoutParams) lp).topMargin = newTabsHeight;
                         this.folderBar.setLayoutParams(lp);
+                    }
+                    if (isSearchOpened() && !Main.G.equals(this.mt)) {
+                        this.folderBar.setTranslationY(this.barCollapsed ? (-newTabsHeight - iDp) : (-newTabsHeight));
+                    } else if (!Main.G.equals(this.mt)) {
+                        this.folderBar.setTranslationY(this.barCollapsed ? (-slideTotal()) : 0.0f);
                     }
                 }
                 if (this.customScroll != null) {
@@ -1271,12 +1439,12 @@ public class Main {
 
                             public void onScrolled(RecyclerView recyclerView, int i, int i2) {
                                 try {
-                                    if (Main.collapseOnScroll() && FolderBarManager.this.collapseAnim == null) {
+                                    if (Main.collapseOnScroll()) {
                                         this.accum += i2;
                                         if (!FolderBarManager.this.barCollapsed && this.accum >= 48.0f) {
                                             this.accum = 0.0f;
                                             long jCurrentTimeMillis = System.currentTimeMillis();
-                                            if (jCurrentTimeMillis - this.lastToggleAt >= 300) {
+                                            if (jCurrentTimeMillis - this.lastToggleAt >= 200) {
                                                 this.lastToggleAt = jCurrentTimeMillis;
                                                 FolderBarManager.this.collapseBar(true);
                                             }
@@ -1285,7 +1453,7 @@ public class Main {
                                         if (FolderBarManager.this.barCollapsed && this.accum <= -48.0f) {
                                             this.accum = 0.0f;
                                             long jCurrentTimeMillis2 = System.currentTimeMillis();
-                                            if (jCurrentTimeMillis2 - this.lastToggleAt >= 300) {
+                                            if (jCurrentTimeMillis2 - this.lastToggleAt >= 200) {
                                                 this.lastToggleAt = jCurrentTimeMillis2;
                                                 FolderBarManager.this.collapseBar(false);
                                             }
@@ -1326,7 +1494,7 @@ public class Main {
             return measuredHeight + iDp;
         }
 
-        void collapseBar(boolean z) {
+        void collapseBar(final boolean z) {
             try {
                 if (this.folderBar == null) {
                     return;
@@ -1336,8 +1504,12 @@ public class Main {
                     this.collapseAnim = null;
                 }
                 final int iDp = AndroidUtilities.dp(44.0f);
-                final int iSlideTotal = slideTotal() - iDp;
-                final int iSlideTotal2 = slideTotal();
+                final boolean inSearch = isSearchOpened() && !Main.G.equals(this.mt);
+                final float restingY = inSearch ? -this.lastTabsHeight : 0.0f;
+                final float collapsedY = inSearch ? (-this.lastTabsHeight - iDp) : (-slideTotal());
+                final float startY = this.folderBar.getTranslationY();
+                final float endY = z ? collapsedY : restingY;
+
                 final View view = this.folderBar;
                 final View view2 = Main.gf(this.emojiView, gridField()) instanceof View ? (View) Main.gf(this.emojiView, gridField()) : null;
                 final View view3 = Main.gf(this.emojiView, searchField()) instanceof View ? (View) Main.gf(this.emojiView, searchField()) : null;
@@ -1345,68 +1517,60 @@ public class Main {
                 final View view5 = this.emptyOverlay;
                 final int i = Main.G.equals(this.mt) ? 0 : this.originalGridMargin;
                 final int i2 = Main.G.equals(this.mt) ? 0 : this.originalSearchMargin;
-                float f = iSlideTotal2 > 0 ? (-view.getTranslationY()) / iSlideTotal2 : 0.0f;
-                if (f < 0.0f) {
-                    f = 0.0f;
-                }
-                if (f > 1.0f) {
-                    f = 1.0f;
-                }
+                final int iSlideTotal = slideTotal() - iDp;
+
                 this.barCollapsed = z;
-                ValueAnimator valueAnimatorOfFloat = ValueAnimator.ofFloat(f, z ? 1.0f : 0.0f);
+                ValueAnimator valueAnimatorOfFloat = ValueAnimator.ofFloat(0.0f, 1.0f);
                 valueAnimatorOfFloat.setDuration(200L);
                 valueAnimatorOfFloat.setInterpolator(new DecelerateInterpolator());
-                valueAnimatorOfFloat.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() { // from class: com.maxplugins.mediafolders.Main.FolderBarManager.27
-                    @Override // android.animation.ValueAnimator.AnimatorUpdateListener
+                valueAnimatorOfFloat.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
+                    @Override
                     public final void onAnimationUpdate(ValueAnimator valueAnimator) {
-                        FolderBarManager.lambda$collapseBar$0(view, iSlideTotal2, view2, i, iDp, view3, i2, view4, iSlideTotal, view5, valueAnimator);
+                        try {
+                            float frac = ((Float) valueAnimator.getAnimatedValue()).floatValue();
+                            float currentY = startY + (endY - startY) * frac;
+                            view.setTranslationY(currentY);
+                            float progress = z ? frac : (1.0f - frac);
+                            float openFrac = 1.0f - progress;
+                            if (view2 != null) {
+                                ViewGroup.LayoutParams lp = view2.getLayoutParams();
+                                if (lp instanceof ViewGroup.MarginLayoutParams) {
+                                    ((ViewGroup.MarginLayoutParams) lp).topMargin = (int) (i + (iDp * openFrac));
+                                    view2.setLayoutParams(lp);
+                                }
+                            }
+                            if (view3 != null) {
+                                ViewGroup.LayoutParams lp2 = view3.getLayoutParams();
+                                if (lp2 instanceof ViewGroup.MarginLayoutParams) {
+                                    ((ViewGroup.MarginLayoutParams) lp2).topMargin = (int) (i2 + (iDp * openFrac));
+                                    view3.setLayoutParams(lp2);
+                                }
+                            }
+                            if (view4 != null) {
+                                ViewGroup.LayoutParams lp3 = view4.getLayoutParams();
+                                if (lp3 instanceof ViewGroup.MarginLayoutParams) {
+                                    ((ViewGroup.MarginLayoutParams) lp3).topMargin = (int) (iSlideTotal + (iDp * openFrac));
+                                    view4.setLayoutParams(lp3);
+                                }
+                            }
+                            if (view5 != null) {
+                                ViewGroup.LayoutParams lp4 = view5.getLayoutParams();
+                                if (lp4 instanceof ViewGroup.MarginLayoutParams) {
+                                    ((ViewGroup.MarginLayoutParams) lp4).topMargin = (int) (iDp * openFrac);
+                                    view5.setLayoutParams(lp4);
+                                }
+                            }
+                        } catch (Throwable ignored) {}
                     }
                 });
-                valueAnimatorOfFloat.addListener(new AnimatorListenerAdapter() { // from class: com.maxplugins.mediafolders.Main.FolderBarManager.3
-                    @Override // android.animation.AnimatorListenerAdapter, android.animation.Animator.AnimatorListener
+                valueAnimatorOfFloat.addListener(new AnimatorListenerAdapter() {
+                    @Override
                     public void onAnimationEnd(Animator animator) {
                         FolderBarManager.this.collapseAnim = null;
                     }
                 });
                 this.collapseAnim = valueAnimatorOfFloat;
                 valueAnimatorOfFloat.start();
-                this.barCollapsed = z;
-            } catch (Throwable th) {
-            }
-        }
-
-        static /* synthetic */ void lambda$collapseBar$0(View view, int i, View view2, int i2, int i3, View view3, int i4, View view4, int i5, View view5, ValueAnimator valueAnimator) {
-            try {
-                float fFloatValue = ((Float) valueAnimator.getAnimatedValue()).floatValue();
-                view.setTranslationY((-i) * fFloatValue);
-                if (view2 != null) {
-                    ViewGroup.LayoutParams layoutParams = view2.getLayoutParams();
-                    if (layoutParams instanceof ViewGroup.MarginLayoutParams) {
-                        ((ViewGroup.MarginLayoutParams) layoutParams).topMargin = (int) (i2 + (i3 * (1.0f - fFloatValue)));
-                        view2.setLayoutParams(layoutParams);
-                    }
-                }
-                if (view3 != null) {
-                    ViewGroup.LayoutParams layoutParams2 = view3.getLayoutParams();
-                    if (layoutParams2 instanceof ViewGroup.MarginLayoutParams) {
-                        ((ViewGroup.MarginLayoutParams) layoutParams2).topMargin = (int) (i4 + (i3 * (1.0f - fFloatValue)));
-                        view3.setLayoutParams(layoutParams2);
-                    }
-                }
-                if (view4 != null) {
-                    ViewGroup.LayoutParams layoutParams3 = view4.getLayoutParams();
-                    if (layoutParams3 instanceof ViewGroup.MarginLayoutParams) {
-                        ((ViewGroup.MarginLayoutParams) layoutParams3).topMargin = (int) (i5 + (i3 * (1.0f - fFloatValue)));
-                        view4.setLayoutParams(layoutParams3);
-                    }
-                }
-                if (view5 != null) {
-                    ViewGroup.LayoutParams layoutParams4 = view5.getLayoutParams();
-                    if (layoutParams4 instanceof ViewGroup.MarginLayoutParams) {
-                        ((ViewGroup.MarginLayoutParams) layoutParams4).topMargin = (int) (i3 * (1.0f - fFloatValue));
-                        view5.setLayoutParams(layoutParams4);
-                    }
-                }
             } catch (Throwable th) {
             }
         }
@@ -1421,6 +1585,9 @@ public class Main {
                     this.collapseAnim = null;
                 }
                 int iDp = AndroidUtilities.dp(44.0f);
+                boolean inSearch = isSearchOpened() && !Main.G.equals(this.mt);
+                float restingY = inSearch ? -this.lastTabsHeight : 0.0f;
+                float collapsedY = inSearch ? (-this.lastTabsHeight - iDp) : (-slideTotal());
                 int iSlideTotal = slideTotal();
                 int i = iSlideTotal - iDp;
                 View view = Main.gf(this.emojiView, gridField()) instanceof View ? (View) Main.gf(this.emojiView, gridField()) : null;
@@ -1430,7 +1597,7 @@ public class Main {
                 boolean z = this.barCollapsed;
                 View view3 = this.folderBar;
                 if (z) {
-                    view3.setTranslationY(-iSlideTotal);
+                    view3.setTranslationY(collapsedY);
                     if (view != null) {
                         setMarginTop(view, i2);
                     }
@@ -1446,7 +1613,7 @@ public class Main {
                     }
                     return;
                 }
-                view3.setTranslationY(0.0f);
+                view3.setTranslationY(restingY);
                 if (view != null) {
                     setMarginTop(view, i2 + iDp);
                 }
@@ -1457,7 +1624,7 @@ public class Main {
                     setMarginTop(this.customScroll, i + iDp);
                 }
                 if (this.emptyOverlay != null) {
-                    setMarginTop(this.emptyOverlay, iDp);
+                    setMarginTop(this.emptyOverlay, iDp + AndroidUtilities.dp(48.0f));
                 }
             } catch (Throwable th) {
             }
@@ -1576,6 +1743,7 @@ public class Main {
                     this.customScroll = null;
                     this.customGrid = null;
                 }
+                this.tabsScrollView = null;
                 resetOffsets();
                 View view = Main.gf(this.emojiView, gridField()) instanceof View ? (View) Main.gf(this.emojiView, gridField()) : null;
                 if (view != null) {
@@ -1652,6 +1820,7 @@ public class Main {
                 frameLayout.setBackgroundColor(Theme.getColor(Theme.key_chat_emojiPanelBackground));
             }
             HorizontalScrollView horizontalScrollView = new HorizontalScrollView(context);
+            this.tabsScrollView = horizontalScrollView;
             horizontalScrollView.setHorizontalScrollBarEnabled(false);
             horizontalScrollView.setOverScrollMode(2);
             this.tabsContainer = new LinearLayout(context);
@@ -3021,14 +3190,16 @@ public class Main {
                                 view.setVisibility(4);
                                 if (view2 != null) {
                                     view2.setVisibility(0);
-                                    view2.bringToFront();
                                 }
                             } else {
                                 view.setVisibility(0);
                                 if (view2 != null) {
                                     view2.setVisibility(8);
                                 }
-                                view.bringToFront();
+                            }
+                            View viewSearch = Main.gf(FolderBarManager.this.emojiView, FolderBarManager.this.searchField()) instanceof View ? (View) Main.gf(FolderBarManager.this.emojiView, FolderBarManager.this.searchField()) : null;
+                            if (viewSearch != null) {
+                                viewSearch.bringToFront();
                             }
                             if (FolderBarManager.this.folderBar != null) {
                                 FolderBarManager.this.folderBar.bringToFront();
@@ -3156,6 +3327,55 @@ public class Main {
         }
     }
 
+    static void onEmojiViewPageChanged(Object emojiView) {
+        if (emojiView == null) {
+            return;
+        }
+        try {
+            FolderBarManager gifMgr = GIF_MANAGERS.get(emojiView);
+            if (gifMgr != null) {
+                gifMgr.resetToAllFolder();
+            }
+            FolderBarManager stMgr = STICKER_MANAGERS.get(emojiView);
+            if (stMgr != null) {
+                stMgr.resetToAllFolder();
+            }
+            FolderBarManager emMgr = EMOJI_MANAGERS.get(emojiView);
+            if (emMgr != null) {
+                emMgr.resetToAllFolder();
+            }
+        } catch (Throwable th) {
+            err(th, "onEmojiViewPageChanged");
+        }
+    }
+
+    static void onEmojiViewSearchStateChanged(final Object emojiView, final boolean opened) {
+        if (emojiView == null) {
+            return;
+        }
+        ui(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    FolderBarManager gifMgr = GIF_MANAGERS.get(emojiView);
+                    if (gifMgr != null) {
+                        gifMgr.onSearchStateChanged(opened);
+                    }
+                    FolderBarManager stMgr = STICKER_MANAGERS.get(emojiView);
+                    if (stMgr != null) {
+                        stMgr.onSearchStateChanged(opened);
+                    }
+                    FolderBarManager emMgr = EMOJI_MANAGERS.get(emojiView);
+                    if (emMgr != null) {
+                        emMgr.onSearchStateChanged(opened);
+                    }
+                } catch (Throwable th) {
+                    err(th, "onEmojiViewSearchStateChanged");
+                }
+            }
+        });
+    }
+
     static FolderBarManager findGifManager(Object obj) {
         return GIF_MANAGERS.get(obj);
     }
@@ -3215,11 +3435,19 @@ public class Main {
         try {
             Class<?> cls = Class.forName("org.telegram.ui.Components.EmojiView");
             hookMethodsByName(cls, "onAttachedToWindow", attachHook);
+            hookMethodsByName(cls, "onOpen", pageChangeHook);
+            hookMethodsByName(cls, "saveNewPage", pageChangeHook);
+            hookMethodsByName(cls, "openSearch", openSearchHook);
+            hookMethodsByName(cls, "closeSearch", closeSearchHook);
             hookMethodsByName(cls, "updateGifTabs", updateGifTabsHook);
             hookMethodsByName(cls, "updateRecentGifs", recentGifsHook);
             hookMethodsByName(cls, "updateStickerTabs", updateStickerTabsHook);
         } catch (Throwable th) {
             err(th, "setupHooks emojiview");
+        }
+        try {
+            hookMethodsByName(Class.forName("androidx.viewpager.widget.ViewPager"), "setCurrentItem", viewPagerHook);
+        } catch (Throwable th) {
         }
         try {
             hookMethodsByName(Class.forName("org.telegram.ui.ActionBar.ActionBarPopupWindow"), "showAtLocation", popupShowHook);
